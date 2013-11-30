@@ -25,7 +25,7 @@
 #include "sysemu/dma.h"
 #include "qemu/timer.h"
 
-#include "tulip_uwire_eeprom.h"
+#include "hw/nvram/eeprom93xx.h"
 #include "tulip_mdio.h"
 
 #define TULIP_CSR0  0x00
@@ -129,7 +129,7 @@ typedef struct TulipState_st {
     QEMUTimer *timer;
     qemu_irq irq;
 
-    struct MicrowireEeprom eeprom;
+    eeprom_t *eeprom;
     struct MiiTransceiver mii;
 
     uint32_t mac_reg[TULIP_CSR_REGION_SIZE >> 2];
@@ -139,7 +139,7 @@ typedef struct TulipState_st {
     int tx_polling;
 } TulipState;
 
-#define EEPROM_TEMPLATE_SIZE 64
+#define EEPROM_SIZE 64
 #define EEPROM_MACADDR_OFFSET 10
 /*
  * DEC has developed its own EEPROM format
@@ -149,7 +149,8 @@ typedef struct TulipState_st {
  * Also see tulip-diag utility code from nictools-pci package
  *     http://ftp.debian.org/debian/pool/main/n/nictools-pci/
  */
-static const uint16_t tulip_eeprom_template[EEPROM_TEMPLATE_SIZE] = {
+static const
+uint16_t tulip_eeprom_template[EEPROM_SIZE] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
  /* ^^^^^^^^^^^^^^ Subsystem IDs */
     0x0000, 0x0104, 0x5554, 0x494c, 0x0050, 0x1e00, 0x0000, 0x0800,
@@ -263,11 +264,13 @@ static inline void tulip_csr9_write(TulipState *s, uint32_t val)
 {
     if (val & TULIP_CSR9_SR) { /* Serial ROM */
         int srdo;
+        int srcs = ((val & TULIP_CSR9_SRCS) != 0);
+        int srck = ((val & TULIP_CSR9_SRCK) != 0);
+        int srdi = ((val & TULIP_CSR9_SRDI) != 0);
 
-        srdo = microwire_tick(&s->eeprom,
-                (val & TULIP_CSR9_SRCK) >> 1,
-                (val & TULIP_CSR9_SRCS),
-                (val & TULIP_CSR9_SRDI) >> 2);
+        eeprom93xx_write(s->eeprom, srcs, srck, srdi);
+
+        srdo = eeprom93xx_read(s->eeprom);
         if (srdo) {
             mac_writereg(s, CSR9, val | TULIP_CSR9_SRDO);
         } else {
@@ -515,6 +518,7 @@ static void pci_tulip_uninit(PCIDevice *dev)
     memory_region_destroy(&d->io);
     timer_del(d->timer);
     timer_free(d->timer);
+    eeprom93xx_free(&dev->qdev, d->eeprom);
     qemu_del_nic(d->nic);
 }
 
@@ -574,8 +578,8 @@ static int pci_tulip_init(PCIDevice *pci_dev)
 {
     TulipState *d = DO_UPCAST(TulipState, dev, pci_dev);
     uint8_t *pci_conf;
+    uint16_t *eeprom_contents;
     uint8_t *macaddr;
-    uint16_t eeprom_template_copy[EEPROM_TEMPLATE_SIZE];
     int i;
 
     pci_conf = d->dev.config;
@@ -601,12 +605,14 @@ static int pci_tulip_init(PCIDevice *pci_dev)
     qemu_macaddr_default_if_unset(&d->conf.macaddr);
     macaddr = d->conf.macaddr.a;
 
-    memmove(eeprom_template_copy, tulip_eeprom_template,
-            sizeof(eeprom_template_copy));
+    d->eeprom = eeprom93xx_new(&pci_dev->qdev, EEPROM_SIZE);
+    eeprom_contents = eeprom93xx_data(d->eeprom);
+    memmove(eeprom_contents, tulip_eeprom_template,
+            EEPROM_SIZE * sizeof(uint16_t));
 
     /* copy macaddr to eeprom as linux driver want find it there */
     for (i = 0; i < 3; i++) {
-        eeprom_template_copy[EEPROM_MACADDR_OFFSET + i] =
+        eeprom_contents[EEPROM_MACADDR_OFFSET + i] =
                 (macaddr[2 * i + 1] << 8) | macaddr[2 * i];
     }
 
@@ -616,9 +622,6 @@ static int pci_tulip_init(PCIDevice *pci_dev)
      * see tulip-diag utility code from nictools-pci package
      *   http://ftp.debian.org/debian/pool/main/n/nictools-pci/
      */
-
-    microwire_reset(&d->eeprom);
-    microwire_load_data(&d->eeprom, eeprom_template_copy);
 
     d->nic = qemu_new_nic(&net_tulip_info, &d->conf,
                           object_get_typename(OBJECT(pci_dev)),
