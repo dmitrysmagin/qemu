@@ -19,13 +19,13 @@
  */
 
 #include "hw/hw.h"
-#include "hw/pci/pci.h"
 #include "net/net.h"
 #include "sysemu/sysemu.h"
 #include "sysemu/dma.h"
 #include "qemu/timer.h"
 
 #include "hw/nvram/eeprom93xx.h"
+#include "tulip.h"
 #include "tulip_mdio.h"
 
 #define TULIP_CSR0  0x00
@@ -118,27 +118,6 @@ struct tulip_tx_desc {
 #define TULIP_TDES1_FS    (1 << 29) /* First Segment */
 #define TULIP_TDES1_SET   (1 << 27) /* Setup Packet */
 
-#define TULIP_CSR_REGION_SIZE       0x80
-
-typedef struct TulipState_st {
-    PCIDevice dev;
-    NICState *nic;
-    NICConf conf;
-    MemoryRegion mmio;
-    MemoryRegion io;
-    QEMUTimer *timer;
-    qemu_irq irq;
-
-    eeprom_t *eeprom;
-    struct MiiTransceiver mii;
-
-    uint32_t mac_reg[TULIP_CSR_REGION_SIZE >> 2];
-
-    uint32_t cur_tx_desc;
-    uint32_t cur_rx_desc;
-    int tx_polling;
-} TulipState;
-
 #define EEPROM_SIZE 64
 #define EEPROM_MACADDR_OFFSET 10
 /*
@@ -164,7 +143,6 @@ uint16_t tulip_eeprom_template[EEPROM_SIZE] = {
      /* we have no Magic Packet block, so checksum is here  ^^^^^^ */
 };
 
-static void tulip_reset(void *opaque);
 static void tulip_update_irq(TulipState *s);
 
 static inline uint32_t mac_readreg(TulipState *s, int index)
@@ -178,18 +156,18 @@ static inline void mac_writereg(TulipState *s, int index, uint32_t val)
 }
 
 /* FIXME: we use external MII tranceiver, so we must change it status here */
-static void tulip_set_link_status(NetClientState *nc)
+void tulip_set_link_status(NetClientState *nc)
 {
 }
 
-static int tulip_can_receive(NetClientState *nc)
+int tulip_can_receive(NetClientState *nc)
 {
     TulipState *s = qemu_get_nic_opaque(nc);
 
     return mac_readreg(s, CSR6) & TULIP_CSR6_RXON;
 }
 
-static ssize_t tulip_receive(NetClientState *nc, const uint8_t *buf,
+ssize_t tulip_receive(NetClientState *nc, const uint8_t *buf,
                              size_t size)
 {
     TulipState *s = qemu_get_nic_opaque(nc);
@@ -203,7 +181,8 @@ static ssize_t tulip_receive(NetClientState *nc, const uint8_t *buf,
 
     cur_rx_desc = s->cur_rx_desc;
     while (1) {
-        pci_dma_read(&s->dev, cur_rx_desc, (void *)&desc, sizeof(desc));
+        s->phys_mem_read(s->dma_opaque, cur_rx_desc, (void *)&desc,
+                         sizeof(desc));
         status = le32_to_cpu(desc.status);
         buffer1 = le32_to_cpu(desc.buffer1);
         buffer2 = le32_to_cpu(desc.buffer2);
@@ -217,8 +196,9 @@ static ssize_t tulip_receive(NetClientState *nc, const uint8_t *buf,
             (((size + 4) << 16) & 0x3fff0000)
             | TULIP_RDES0_FS | TULIP_RDES0_LS);
 
-        pci_dma_write(&s->dev, buffer1, buf, size);
-        pci_dma_write(&s->dev, cur_rx_desc, (void *)&desc, sizeof(desc));
+        s->phys_mem_write(s->dma_opaque, buffer1, (uint8_t *)buf, size);
+        s->phys_mem_write(s->dma_opaque, cur_rx_desc, (uint8_t *)&desc,
+                          sizeof(desc));
         mac_writereg(s, CSR5, TULIP_CSR5_RI | mac_readreg(s, CSR5));
 
         s->cur_rx_desc = buffer2;
@@ -317,7 +297,8 @@ static void process_tx(TulipState *s)
     while (1) {
         uint32_t to_copy;
 
-        pci_dma_read(&s->dev, cur_tx_desc, (void *)&desc, sizeof(desc));
+        s->phys_mem_read(s->dma_opaque, cur_tx_desc, (void *)&desc,
+                         sizeof(desc));
         status = le32_to_cpu(desc.status);
         length = le32_to_cpu(desc.length);
         buffer1 = le32_to_cpu(desc.buffer1);
@@ -337,12 +318,13 @@ static void process_tx(TulipState *s)
 
         if (length & TULIP_TDES1_SET) { /* Setup Frame */
             /* FIXME: check (to_copy == 192) */
-            pci_dma_read(&s->dev, buffer1, (void *)a, to_copy);
+            s->phys_mem_read(s->dma_opaque, buffer1, (void *)a, to_copy);
 
             process_setup_frame(s, a);
         } else {
 
-            pci_dma_read(&s->dev, buffer1, (void *)(a + cur_offset), to_copy);
+            s->phys_mem_read(s->dma_opaque, buffer1,
+                              (uint8_t *)(a + cur_offset), to_copy);
 
             cur_offset += to_copy;
 
@@ -358,7 +340,8 @@ static void process_tx(TulipState *s)
         }
 
         desc.status = cpu_to_le32(status & ~TULIP_TDES0_OWN);
-        pci_dma_write(&s->dev, cur_tx_desc, (void *)&desc, sizeof(desc));
+        s->phys_mem_write(s->dma_opaque, cur_tx_desc, (void *)&desc,
+                          sizeof(desc));
 
         /* Last Segment */
         if (length & TULIP_TDES1_LS) {
@@ -372,7 +355,7 @@ static void process_tx(TulipState *s)
     }
 }
 
-static void tulip_csr_write(void *opaque, hwaddr addr, uint64_t val,
+void tulip_csr_write(void *opaque, hwaddr addr, uint64_t val,
                  unsigned size)
 {
     TulipState *s = opaque;
@@ -430,7 +413,7 @@ static void tulip_csr_write(void *opaque, hwaddr addr, uint64_t val,
     }
 }
 
-static uint64_t tulip_csr_read(void *opaque, hwaddr addr, unsigned size)
+uint64_t tulip_csr_read(void *opaque, hwaddr addr, unsigned size)
 {
     TulipState *s = opaque;
     unsigned int index = addr & (TULIP_CSR_REGION_SIZE - 1);
@@ -461,27 +444,54 @@ static uint64_t tulip_csr_read(void *opaque, hwaddr addr, unsigned size)
     return ret;
 }
 
-static const MemoryRegionOps tulip_mmio_ops = {
-    .read = tulip_csr_read,
-    .write = tulip_csr_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-    },
-};
+void tulip_cleanup(TulipState *s)
+{
+    s->nic = NULL;
+}
 
-static const VMStateDescription vmstate_tulip = {
-    .name = "tulip",
-    .version_id = 2,
-    .minimum_version_id = 1,
-    .minimum_version_id_old = 1,
-    .fields      = (VMStateField[]) {
-        VMSTATE_PCI_DEVICE(dev, TulipState),
-        VMSTATE_MACADDR(conf.macaddr, TulipState),
-        VMSTATE_END_OF_LIST()
+int tulip_init(DeviceState *dev, TulipState *s, NetClientInfo *info)
+{
+    int i;
+    uint8_t *macaddr;
+    uint16_t *eeprom_contents;
+
+    lxt971_init(&s->mii, 0);
+
+    qemu_macaddr_default_if_unset(&s->conf.macaddr);
+    macaddr = s->conf.macaddr.a;
+
+    s->eeprom = eeprom93xx_new(dev, EEPROM_SIZE);
+    eeprom_contents = eeprom93xx_data(s->eeprom);
+    memmove(eeprom_contents, tulip_eeprom_template,
+            EEPROM_SIZE * sizeof(uint16_t));
+
+    /* copy macaddr to eeprom as linux driver want find it there */
+    for (i = 0; i < 3; i++) {
+        eeprom_contents[EEPROM_MACADDR_OFFSET + i] =
+                (macaddr[2 * i + 1] << 8) | macaddr[2 * i];
     }
-};
+
+    /*
+     * FIXME: we have to update eeprom checksum too.
+     *
+     * see tulip-diag utility code from nictools-pci package
+     *   http://ftp.debian.org/debian/pool/main/n/nictools-pci/
+     */
+
+    s->nic = qemu_new_nic(info, &s->conf,
+                          object_get_typename(OBJECT(dev)),
+                          dev->id, s);
+
+    qemu_format_nic_info_str(qemu_get_queue(s->nic), macaddr);
+
+    add_boot_device_path(s->conf.bootindex, dev, "/ethernet-phy@0");
+
+    s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tulip_timer, s);
+    timer_mod(s->timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + get_ticks_per_sec());
+
+    return 0;
+}
 
 static const uint32_t mac_reg_init[] = {
     [CSR0] = 0xfe000000,
@@ -502,27 +512,7 @@ static const uint32_t mac_reg_init[] = {
     [CSR15] = 0x00000000,
 };
 
-static void tulip_cleanup(NetClientState *nc)
-{
-    TulipState *s = qemu_get_nic_opaque(nc);
-
-    s->nic = NULL;
-}
-
-static void pci_tulip_uninit(PCIDevice *dev)
-{
-    TulipState *d = DO_UPCAST(TulipState, dev, dev);
-
-    qemu_free_irq(d->irq);
-    memory_region_destroy(&d->mmio);
-    memory_region_destroy(&d->io);
-    timer_del(d->timer);
-    timer_free(d->timer);
-    eeprom93xx_free(&dev->qdev, d->eeprom);
-    qemu_del_nic(d->nic);
-}
-
-static void tulip_reset(void *opaque)
+void tulip_reset(void *opaque)
 {
     TulipState *d = opaque;
 
@@ -531,15 +521,6 @@ static void tulip_reset(void *opaque)
 
     d->tx_polling = 0;
 }
-
-static NetClientInfo net_tulip_info = {
-    .type = NET_CLIENT_OPTIONS_KIND_NIC,
-    .size = sizeof(NICState),
-    .can_receive = tulip_can_receive,
-    .receive = tulip_receive,
-    .cleanup = tulip_cleanup,
-    .link_status_changed = tulip_set_link_status,
-};
 
 static void tulip_update_irq(TulipState *s)
 {
@@ -560,7 +541,7 @@ static void tulip_update_irq(TulipState *s)
     qemu_set_irq(s->irq, isr);
 }
 
-static void tulip_timer(void *opaque)
+void tulip_timer(void *opaque)
 {
     TulipState *s = opaque;
 
@@ -574,110 +555,3 @@ static void tulip_timer(void *opaque)
         qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + get_ticks_per_sec() / 10);
 }
 
-static int pci_tulip_init(PCIDevice *pci_dev)
-{
-    TulipState *d = DO_UPCAST(TulipState, dev, pci_dev);
-    uint8_t *pci_conf;
-    uint16_t *eeprom_contents;
-    uint8_t *macaddr;
-    int i;
-
-    pci_conf = d->dev.config;
-
-    /* TODO: RST# value should be 0, PCI spec 6.2.4 */
-    pci_conf[PCI_CACHE_LINE_SIZE] = 0x10;
-
-    pci_conf[PCI_INTERRUPT_PIN] = 1; /* interrupt pin A */
-
-    /* PCI interface */
-    memory_region_init_io(&d->mmio, OBJECT(d), &tulip_mmio_ops, d,
-                          "tulip-mmio", TULIP_CSR_REGION_SIZE);
-    memory_region_init_io(&d->io, OBJECT(d), &tulip_mmio_ops, d,
-                          "tulip-io", TULIP_CSR_REGION_SIZE);
-
-    pci_register_bar(&d->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &d->io);
-    pci_register_bar(&d->dev, 1, PCI_BASE_ADDRESS_SPACE_MEMORY, &d->mmio);
-
-    d->irq = pci_allocate_irq(pci_dev);
-
-    lxt971_init(&d->mii, 0);
-
-    qemu_macaddr_default_if_unset(&d->conf.macaddr);
-    macaddr = d->conf.macaddr.a;
-
-    d->eeprom = eeprom93xx_new(&pci_dev->qdev, EEPROM_SIZE);
-    eeprom_contents = eeprom93xx_data(d->eeprom);
-    memmove(eeprom_contents, tulip_eeprom_template,
-            EEPROM_SIZE * sizeof(uint16_t));
-
-    /* copy macaddr to eeprom as linux driver want find it there */
-    for (i = 0; i < 3; i++) {
-        eeprom_contents[EEPROM_MACADDR_OFFSET + i] =
-                (macaddr[2 * i + 1] << 8) | macaddr[2 * i];
-    }
-
-    /*
-     * FIXME: we have to update eeprom checksum too.
-     *
-     * see tulip-diag utility code from nictools-pci package
-     *   http://ftp.debian.org/debian/pool/main/n/nictools-pci/
-     */
-
-    d->nic = qemu_new_nic(&net_tulip_info, &d->conf,
-                          object_get_typename(OBJECT(pci_dev)),
-                          d->dev.qdev.id, d);
-
-    qemu_format_nic_info_str(qemu_get_queue(d->nic), macaddr);
-
-    add_boot_device_path(d->conf.bootindex, &pci_dev->qdev, "/ethernet-phy@0");
-
-    d->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, tulip_timer, d);
-    timer_mod(d->timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + get_ticks_per_sec());
-
-    return 0;
-}
-
-static void qdev_tulip_reset(DeviceState *dev)
-{
-    TulipState *d = DO_UPCAST(TulipState, dev.qdev, dev);
-
-    tulip_reset(d);
-}
-
-static Property tulip_properties[] = {
-    DEFINE_NIC_PROPERTIES(TulipState, conf),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
-static void tulip_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->init = pci_tulip_init;
-    k->exit = pci_tulip_uninit;
-    k->vendor_id = PCI_VENDOR_ID_DEC;
-    k->device_id = PCI_DEVICE_ID_DEC_21142;
-    k->revision = 0x41; /* 21143 chip */
-    k->class_id = PCI_CLASS_NETWORK_ETHERNET;
-    dc->desc = "DEC 21143 Tulip";
-    dc->reset = qdev_tulip_reset;
-    dc->vmsd = &vmstate_tulip;
-    dc->props = tulip_properties;
-    set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
-}
-
-static const TypeInfo tulip_info = {
-    .name = "tulip",
-    .parent = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(TulipState),
-    .class_init = tulip_class_init,
-};
-
-static void tulip_register_types(void)
-{
-    type_register_static(&tulip_info);
-}
-
-type_init(tulip_register_types)
