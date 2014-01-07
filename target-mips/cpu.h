@@ -5,7 +5,7 @@
 
 #define TARGET_HAS_ICE 1
 
-#define ELF_MACHINE	EM_MIPS
+#define ELF_MACHINE    EM_MIPS
 
 #define CPUArchState struct CPUMIPSState
 
@@ -107,25 +107,25 @@ struct CPUMIPSFPUContext {
 typedef struct CPUMIPSMVPContext CPUMIPSMVPContext;
 struct CPUMIPSMVPContext {
     int32_t CP0_MVPControl;
-#define CP0MVPCo_CPA	3
-#define CP0MVPCo_STLB	2
-#define CP0MVPCo_VPC	1
-#define CP0MVPCo_EVP	0
+#define CP0MVPCo_CPA    3
+#define CP0MVPCo_STLB    2
+#define CP0MVPCo_VPC    1
+#define CP0MVPCo_EVP    0
     int32_t CP0_MVPConf0;
-#define CP0MVPC0_M	31
-#define CP0MVPC0_TLBS	29
-#define CP0MVPC0_GS	28
-#define CP0MVPC0_PCP	27
-#define CP0MVPC0_PTLBE	16
-#define CP0MVPC0_TCA	15
-#define CP0MVPC0_PVPE	10
-#define CP0MVPC0_PTC	0
+#define CP0MVPC0_M    31
+#define CP0MVPC0_TLBS    29
+#define CP0MVPC0_GS    28
+#define CP0MVPC0_PCP    27
+#define CP0MVPC0_PTLBE    16
+#define CP0MVPC0_TCA    15
+#define CP0MVPC0_PVPE    10
+#define CP0MVPC0_PTC    0
     int32_t CP0_MVPConf1;
-#define CP0MVPC1_CIM	31
-#define CP0MVPC1_CIF	30
-#define CP0MVPC1_PCX	20
-#define CP0MVPC1_PCP2	10
-#define CP0MVPC1_PCP1	0
+#define CP0MVPC1_CIM    31
+#define CP0MVPC1_CIF    30
+#define CP0MVPC1_PCX    20
+#define CP0MVPC1_PCP2    10
+#define CP0MVPC1_PCP1    0
 };
 
 typedef struct mips_def_t mips_def_t;
@@ -144,28 +144,59 @@ struct TCState {
     target_ulong ACX[MIPS_DSP_ACC];
     target_ulong DSPControl;
     int32_t CP0_TCStatus;
-#define CP0TCSt_TCU3	31
-#define CP0TCSt_TCU2	30
-#define CP0TCSt_TCU1	29
-#define CP0TCSt_TCU0	28
-#define CP0TCSt_TMX	27
-#define CP0TCSt_RNST	23
-#define CP0TCSt_TDS	21
-#define CP0TCSt_DT	20
-#define CP0TCSt_DA	15
-#define CP0TCSt_A	13
-#define CP0TCSt_TKSU	11
-#define CP0TCSt_IXMT	10
-#define CP0TCSt_TASID	0
+#define CP0TCSt_TCU3    31
+#define CP0TCSt_TCU2    30
+#define CP0TCSt_TCU1    29
+#define CP0TCSt_TCU0    28
+#define CP0TCSt_TMX    27
+#define CP0TCSt_RNST    23
+#define CP0TCSt_TDS    21
+#define CP0TCSt_DT    20
+#define CP0TCSt_DA    15
+#define CP0TCSt_A    13
+#define CP0TCSt_TKSU    11
+#define CP0TCSt_IXMT    10
+#define CP0TCSt_TASID    0
     int32_t CP0_TCBind;
-#define CP0TCBd_CurTC	21
-#define CP0TCBd_TBE	17
-#define CP0TCBd_CurVPE	0
+#define CP0TCBd_CurTC    21
+#define CP0TCBd_TBE    17
+#define CP0TCBd_CurVPE    0
     target_ulong CP0_TCHalt;
     target_ulong CP0_TCContext;
     target_ulong CP0_TCSchedule;
     target_ulong CP0_TCScheFBack;
     int32_t CP0_Debug_tcstatus;
+};
+
+typedef struct VmipsCpu VmipsCpu;
+struct VmipsCpu {
+    /* Important registers: */
+    uint32_t pc;      /* Program counter */
+    uint32_t reg[32]; /* General-purpose registers */
+    uint32_t instr;   /* The current instruction */
+    uint32_t hi, lo;  /* Division and multiplication results */
+
+    /* Exception bookkeeping data. */
+    uint32_t last_epc;
+    int last_prio;
+    uint32_t next_epc;
+
+    uint32_t cp0_reg[32];
+    bool exception_pending;
+
+    /* Delay slot handling. */
+    int delay_state;
+    uint32_t delay_pc;
+
+    /* Cached option values that we use in the CPU core. */
+    bool opt_excmsg;
+    bool opt_reportirq;
+    bool opt_excpriomsg;
+    bool opt_haltbreak;
+    bool opt_haltibe;
+    bool opt_haltjrra;
+    bool opt_instdump;
+    bool opt_bigendian; /* True if CPU in big endian mode. */
 };
 
 typedef struct CPUMIPSState CPUMIPSState;
@@ -185,44 +216,44 @@ struct CPUMIPSState {
     /* CP0_MVP* are per MVP registers. */
     int32_t CP0_Random;
     int32_t CP0_VPEControl;
-#define CP0VPECo_YSI	21
-#define CP0VPECo_GSI	20
-#define CP0VPECo_EXCPT	16
-#define CP0VPECo_TE	15
-#define CP0VPECo_TargTC	0
+#define CP0VPECo_YSI    21
+#define CP0VPECo_GSI    20
+#define CP0VPECo_EXCPT    16
+#define CP0VPECo_TE    15
+#define CP0VPECo_TargTC    0
     int32_t CP0_VPEConf0;
-#define CP0VPEC0_M	31
-#define CP0VPEC0_XTC	21
-#define CP0VPEC0_TCS	19
-#define CP0VPEC0_SCS	18
-#define CP0VPEC0_DSC	17
-#define CP0VPEC0_ICS	16
-#define CP0VPEC0_MVP	1
-#define CP0VPEC0_VPA	0
+#define CP0VPEC0_M    31
+#define CP0VPEC0_XTC    21
+#define CP0VPEC0_TCS    19
+#define CP0VPEC0_SCS    18
+#define CP0VPEC0_DSC    17
+#define CP0VPEC0_ICS    16
+#define CP0VPEC0_MVP    1
+#define CP0VPEC0_VPA    0
     int32_t CP0_VPEConf1;
-#define CP0VPEC1_NCX	20
-#define CP0VPEC1_NCP2	10
-#define CP0VPEC1_NCP1	0
+#define CP0VPEC1_NCX    20
+#define CP0VPEC1_NCP2    10
+#define CP0VPEC1_NCP1    0
     target_ulong CP0_YQMask;
     target_ulong CP0_VPESchedule;
     target_ulong CP0_VPEScheFBack;
     int32_t CP0_VPEOpt;
-#define CP0VPEOpt_IWX7	15
-#define CP0VPEOpt_IWX6	14
-#define CP0VPEOpt_IWX5	13
-#define CP0VPEOpt_IWX4	12
-#define CP0VPEOpt_IWX3	11
-#define CP0VPEOpt_IWX2	10
-#define CP0VPEOpt_IWX1	9
-#define CP0VPEOpt_IWX0	8
-#define CP0VPEOpt_DWX7	7
-#define CP0VPEOpt_DWX6	6
-#define CP0VPEOpt_DWX5	5
-#define CP0VPEOpt_DWX4	4
-#define CP0VPEOpt_DWX3	3
-#define CP0VPEOpt_DWX2	2
-#define CP0VPEOpt_DWX1	1
-#define CP0VPEOpt_DWX0	0
+#define CP0VPEOpt_IWX7    15
+#define CP0VPEOpt_IWX6    14
+#define CP0VPEOpt_IWX5    13
+#define CP0VPEOpt_IWX4    12
+#define CP0VPEOpt_IWX3    11
+#define CP0VPEOpt_IWX2    10
+#define CP0VPEOpt_IWX1    9
+#define CP0VPEOpt_IWX0    8
+#define CP0VPEOpt_DWX7    7
+#define CP0VPEOpt_DWX6    6
+#define CP0VPEOpt_DWX5    5
+#define CP0VPEOpt_DWX4    4
+#define CP0VPEOpt_DWX3    3
+#define CP0VPEOpt_DWX2    2
+#define CP0VPEOpt_DWX1    1
+#define CP0VPEOpt_DWX0    0
     target_ulong CP0_EntryLo0;
     target_ulong CP0_EntryLo1;
     target_ulong CP0_Context;
@@ -231,33 +262,33 @@ struct CPUMIPSState {
     int32_t CP0_Wired;
     int32_t CP0_SRSConf0_rw_bitmask;
     int32_t CP0_SRSConf0;
-#define CP0SRSC0_M	31
-#define CP0SRSC0_SRS3	20
-#define CP0SRSC0_SRS2	10
-#define CP0SRSC0_SRS1	0
+#define CP0SRSC0_M    31
+#define CP0SRSC0_SRS3    20
+#define CP0SRSC0_SRS2    10
+#define CP0SRSC0_SRS1    0
     int32_t CP0_SRSConf1_rw_bitmask;
     int32_t CP0_SRSConf1;
-#define CP0SRSC1_M	31
-#define CP0SRSC1_SRS6	20
-#define CP0SRSC1_SRS5	10
-#define CP0SRSC1_SRS4	0
+#define CP0SRSC1_M    31
+#define CP0SRSC1_SRS6    20
+#define CP0SRSC1_SRS5    10
+#define CP0SRSC1_SRS4    0
     int32_t CP0_SRSConf2_rw_bitmask;
     int32_t CP0_SRSConf2;
-#define CP0SRSC2_M	31
-#define CP0SRSC2_SRS9	20
-#define CP0SRSC2_SRS8	10
-#define CP0SRSC2_SRS7	0
+#define CP0SRSC2_M    31
+#define CP0SRSC2_SRS9    20
+#define CP0SRSC2_SRS8    10
+#define CP0SRSC2_SRS7    0
     int32_t CP0_SRSConf3_rw_bitmask;
     int32_t CP0_SRSConf3;
-#define CP0SRSC3_M	31
-#define CP0SRSC3_SRS12	20
-#define CP0SRSC3_SRS11	10
-#define CP0SRSC3_SRS10	0
+#define CP0SRSC3_M    31
+#define CP0SRSC3_SRS12    20
+#define CP0SRSC3_SRS11    10
+#define CP0SRSC3_SRS10    0
     int32_t CP0_SRSConf4_rw_bitmask;
     int32_t CP0_SRSConf4;
-#define CP0SRSC4_SRS15	20
-#define CP0SRSC4_SRS14	10
-#define CP0SRSC4_SRS13	0
+#define CP0SRSC4_SRS15    20
+#define CP0SRSC4_SRS14    10
+#define CP0SRSC4_SRS13    0
     int32_t CP0_HWREna;
     target_ulong CP0_BadVAddr;
     int32_t CP0_Count;
@@ -477,6 +508,7 @@ struct CPUMIPSState {
     const mips_def_t *cpu_model;
     void *irq[8];
     QEMUTimer *timer; /* Internal timer */
+    VmipsCpu vmips;
 };
 
 #include "cpu-qom.h"
@@ -659,7 +691,7 @@ int cpu_mips_handle_mmu_fault (CPUMIPSState *env, target_ulong address, int rw,
 #if !defined(CONFIG_USER_ONLY)
 void r4k_invalidate_tlb (CPUMIPSState *env, int idx, int use_extra);
 hwaddr cpu_mips_translate_address (CPUMIPSState *env, target_ulong address,
-		                               int rw);
+                                       int rw);
 #endif
 target_ulong exception_resume_pc (CPUMIPSState *env);
 

@@ -1217,6 +1217,8 @@ int vm_stop_force_state(RunState state)
     }
 }
 
+extern int precise_cpu_mips_exec(CPUArchState *env);
+
 static int tcg_cpu_exec(CPUArchState *env)
 {
     int ret;
@@ -1252,7 +1254,7 @@ static int tcg_cpu_exec(CPUArchState *env)
         env->icount_decr.u16.low = decr;
         env->icount_extra = count;
     }
-    ret = cpu_exec(env);
+    ret = precise_cpu_mips_exec(env);
 #ifdef CONFIG_PROFILER
     qemu_time += profile_getclock() - ti;
 #endif
