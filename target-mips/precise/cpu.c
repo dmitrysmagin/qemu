@@ -26,8 +26,8 @@
 
 #include "cpu.h"
 #include "qemu/bswap.h"
-#include "precise-excnames.h"
-#include "precise-cpzeroreg.h"
+#include "excnames.h"
+#include "cpzeroreg.h"
 
 int precise_cpu_mips_exec(CPUArchState *env);
 void precise_mips_cpu_init(struct CPUMIPSState *env);
